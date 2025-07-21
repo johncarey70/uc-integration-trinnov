@@ -1,0 +1,4 @@
+pyee>=13.0.0
+ucapi>=0.2.0
+zeroconf>=0.146.5
+pytrinnov>=1.0.0

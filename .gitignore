@@ -1,0 +1,33 @@
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.log
+*.db
+*.sqlite3
+.python-version
+
+# Virtual environments
+.venv/
+.env/
+
+# Build artifacts
+dist/
+build/
+
+# Editor and IDE config
+.vscode/
+
+# Local config/linting
+.pylintrc
+
+# Project-specific
+# Project-specific
+config.json
+.old/
+intg-trinnov/save/
+scripts/*
+Makefile
+assets/
