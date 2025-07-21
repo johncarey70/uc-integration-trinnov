@@ -1,8 +1,10 @@
 {
   "driver_id": "trinnov",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "min_core_api": "0.20.0",
-  "name": { "en": "Trinnov Altitude" },
+  "name": {
+    "en": "Trinnov Altitude"
+  },
   "icon": "custom:trinnov.png",
   "description": {
     "en": "Integration to control a Trinnov Altitude Processor."
@@ -25,12 +27,15 @@
         "label": {
           "en": "Notes"
         },
-        "field": { "label": { "value": {
-            "en": "By clicking on next an attempt is made to automatically find the Trinnov Altitude Processor in your local network.\nThe Trinnov must be powered on for this to work.\nIf the Trinnov is not connected to the local network you must activate by using the manual setup."
-            } }
+        "field": {
+          "label": {
+            "value": {
+              "en": "By clicking on next an attempt is made to automatically find the Trinnov Altitude Processor in your local network.\nThe Trinnov must be powered on for this to work.\nIf the Trinnov is not connected to the local network you must activate by using the manual setup."
+            }
+          }
         }
       },
-      {  
+      {
         "id": "manual",
         "label": {
           "en": "Manual Setup"
