@@ -1,6 +1,6 @@
 {
   "driver_id": "trinnov",
-  "version": "0.0.2",
+  "version": "1.0.0",
   "min_core_api": "0.20.0",
   "name": { "en": "Trinnov Altitude" },
   "icon": "custom:trinnov.png",
