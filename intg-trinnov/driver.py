@@ -37,7 +37,7 @@ async def on_r2_disconnect() -> None:
 
     _LOG.info("Received disconnect event message from remote")
     await api.set_device_state(ucapi.DeviceStates.DISCONNECTED)
-    #loop.create_task(disconnect_all())
+    loop.create_task(disconnect_all())
 
 
 @api.listens_to(ucapi.Events.ENTER_STANDBY)
@@ -161,7 +161,7 @@ def _update_entity_attributes(entity_id: str, entity, attributes: dict):
             entity_id,
             {
                 ucapi.remote.Attributes.STATE:
-                REMOTE_STATE_MAPPING.get(attributes.get(MediaAttr.STATE, States.UNKNOWN))
+                REMOTE_STATE_MAPPING.get(attributes.get(MediaAttr.STATE, States.UNAVAILABLE))
             }
         )
 

@@ -62,17 +62,38 @@ class TrinnovRemote(Remote):
         """Create a user interface with different pages that includes all commands"""
 
         vol60 = remote.create_sequence_cmd([cmds.VOLUME, "60"])
-
+        vol70 = remote.create_sequence_cmd([cmds.VOLUME, "70"])
+        
         ui_page1 = UiPage("page1", "Power", grid=Size(6, 6))
         ui_page1.add(create_ui_text("Power On", 0, 0, size=Size(3, 1), cmd=Commands.ON))
         ui_page1.add(create_ui_text("Power Off", 3, 0, size=Size(3, 1), cmd=Commands.OFF))
         ui_page1.add(create_ui_text("Set Volume 60%", 0, 1, size=Size(6, 1), cmd=vol60))
+        ui_page1.add(create_ui_text("Set Volume 70%", 0, 2, size=Size(6, 1), cmd=vol70))
         ui_page1.add(create_ui_text("--- Toggle Commands ---", 0, 3, size=Size(6, 1)))
         ui_page1.add(create_ui_text("Dim", 0, 4, size=Size(3, 1), cmd=send_cmd(cmds.DIM_TOGGLE)))
         ui_page1.add(create_ui_text("Bypass", 3, 4, size=Size(3, 1), cmd=send_cmd(cmds.BYPASS_TOGGLE)))
         ui_page1.add(create_ui_text("Front Panel Light", 0, 5, size=Size(6, 1), cmd=send_cmd(cmds.FAV_LIGHT)))
 
-        return [ui_page1]
+        snd1 = remote.create_sequence_cmd([cmds.SELECT_SOUND_MODE, "auto"])
+        snd2 = remote.create_sequence_cmd([cmds.SELECT_SOUND_MODE, "dolby"])
+        snd3 = remote.create_sequence_cmd([cmds.SELECT_SOUND_MODE, "dts"])
+        snd4 = remote.create_sequence_cmd([cmds.SELECT_SOUND_MODE, "auro3d"])
+        snd5 = remote.create_sequence_cmd([cmds.SELECT_SOUND_MODE, "native"])
+        snd6 = remote.create_sequence_cmd([cmds.SELECT_SOUND_MODE, "upmix_on_native"])
+        snd7 = remote.create_sequence_cmd([cmds.SELECT_SOUND_MODE, "legacy"])
+
+        ui_page2 = UiPage("page2", "Sound Modes", grid=Size(6, 6))
+        ui_page2.add(create_ui_text("--- Select Sound Mode ---", 0, 0, size=Size(6, 1)))
+        ui_page2.add(create_ui_text("Auto", 0, 1, size=Size(6, 1), cmd=snd1))
+        ui_page2.add(create_ui_text("Auro-3D", 0, 2, size=Size(3, 1), cmd=snd4))
+        ui_page2.add(create_ui_text("Dolby Surround", 0, 3, size=Size(3, 1), cmd=snd2))
+        ui_page2.add(create_ui_text("Legacy", 0, 4, size=Size(3, 1), cmd=snd7))
+        ui_page2.add(create_ui_text("Native", 3, 2, size=Size(3, 1), cmd=snd5))
+        ui_page2.add(create_ui_text("Neural:X", 3, 3, size=Size(3, 1), cmd=snd3))
+        ui_page2.add(create_ui_text("Upmix on Native", 3, 4, size=Size(3, 1), cmd=snd6))
+        
+
+        return [ui_page1, ui_page2]
 
     async def command(self, cmd_id: str, params: dict[str, Any] | None = None) -> StatusCodes:
         """
@@ -144,6 +165,10 @@ class TrinnovRemote(Remote):
                             status = StatusCodes.OK
                         except (IndexError, ValueError):
                             status = StatusCodes.BAD_REQUEST
+                    elif commands and commands[0] == "select_sound_mode":
+                        mode_key = commands[1]
+                        await self._device.executor.upmixer(mode_key)
+                        status = StatusCodes.OK
                     else:
                         status = StatusCodes.NOT_IMPLEMENTED
 

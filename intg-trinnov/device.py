@@ -5,6 +5,7 @@
 # pylint: disable=too-many-instance-attributes
 
 import asyncio
+import errno
 import inspect
 import logging
 from asyncio import AbstractEventLoop
@@ -186,20 +187,24 @@ class TrinnovDevice:
 
     async def connect(self):
         """Establish and maintain a connection to the Trinnov device."""
-        _LOG.debug("Connecting to device")
+        _LOG.debug("Connecting to Trinnov Processor")
 
         if self._device.context.connection.handler is not None:
-            _LOG.debug("Already connected to Trinnov at %s:%d", self.ip, self.port)
-            return
+            _LOG.debug("Already connected to Trinnov at %s:%d, disconnecting first", self.ip, self.port)
+            await self.disconnect()
 
         self._connected = False
-        # Attempt direct connection first
+
         try:
             await asyncio.wait_for(self._device.open(host=self.ip, port=self.port), timeout=3.0)
             return
         except (asyncio.TimeoutError, OSError, ConnectionError) as e:
-            _LOG.warning("Immediate connect failed: %s. Falling back to wait routine.", e)
+            if isinstance(e, OSError) and e.errno in {errno.ENETUNREACH, errno.EHOSTUNREACH}:
+                _LOG.warning("Network unreachable check local connectivity (Wi-Fi off?)")
+            else:
+                _LOG.warning("Immediate connect failed: %s. Falling back to wait routine.", e)
 
+        # Retry loop always runs after failure
         async def wait_loop():
             while self._wait_task and not self._wait_task.done():
                 ready = await self.wait_for_device_ready()
@@ -209,11 +214,12 @@ class TrinnovDevice:
 
                 try:
                     await self._device.open(host=self.ip, port=self.port)
-                    _LOG.info("Connected to Trinnov at %s:%d", self.ip, self.port)
                     return
-                except (OSError, ConnectionError) as e:
-                    _LOG.debug("Failed to connect to Trinnov: %s", e)
-                    _LOG.debug("Device not ready, will retry in 10 seconds...")
+                except OSError as e:
+                    if e.errno in {errno.ENETUNREACH, errno.EHOSTUNREACH}:
+                        _LOG.warning("Network unreachable  retrying in 10s...")
+                    else:
+                        _LOG.debug("Failed to connect to Trinnov: %s", e)
                     await asyncio.sleep(10)
 
         self._wait_task = asyncio.create_task(wait_loop())
@@ -371,17 +377,20 @@ class TrinnovDevice:
                 await self._emit_update(prefix.value, attr, value)
 
             # Only reconnect if the disconnect was NOT intentional
-            if not self._was_intentional_disconnect:
+            if self._was_intentional_disconnect:
+                _LOG.info("Intentional disconnect - not reconnecting")
+            else:
+                _LOG.warning("Unexpected disconnect - device may have been powered down")
                 await asyncio.sleep(20)
                 _LOG.info("Triggering reconnect after unexpected disconnect")
                 asyncio.create_task(self.connect())
-
-            self._was_intentional_disconnect = False
 
         elif state == ConnectionStatus.CONNECTED:
             _LOG.info("Connected to Trinnov at %s:%d", self.ip, self.port)
             self._connected = True
             self._attr_state = MediaStates.ON
+
+            self._was_intentional_disconnect = False
 
             self.events.emit(Events.CONNECTED.name, self.device_id)
             updates = {
