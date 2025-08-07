@@ -179,8 +179,8 @@ class TrinnovDevice:
             MediaAttr.MUTED: self.muted,
             MediaAttr.STATE: self.state,
             MediaAttr.VOLUME: self.volume,
-            MediaAttr.SOURCE_LIST: self.source_list,
-            MediaAttr.SOUND_MODE_LIST: self.sound_modes
+            MediaAttr.SOURCE_LIST: list(self.source_list.values()),
+            MediaAttr.SOUND_MODE_LIST: list(self.sound_modes.values())
         }
 
         return updated_data

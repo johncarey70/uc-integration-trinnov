@@ -3,7 +3,7 @@
 
 import logging
 from typing import Any
-
+import asyncio
 import config
 import ucapi
 from api import api, loop
@@ -36,7 +36,11 @@ async def on_r2_disconnect() -> None:
     """Disconnect notification from the Remote Two."""
 
     _LOG.info("Received disconnect event message from remote")
-    await api.set_device_state(ucapi.DeviceStates.DISCONNECTED)
+    await asyncio.sleep(0)
+    try:
+        await api.set_device_state(ucapi.DeviceStates.DISCONNECTED)
+    except RuntimeError as e:
+        _LOG.warning("Runtime Eoor during set_device_state(): %s", e)
     loop.create_task(disconnect_all())
 
 

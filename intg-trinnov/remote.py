@@ -63,7 +63,7 @@ class TrinnovRemote(Remote):
 
         vol60 = remote.create_sequence_cmd([cmds.VOLUME, "60"])
         vol70 = remote.create_sequence_cmd([cmds.VOLUME, "70"])
-        
+
         ui_page1 = UiPage("page1", "Power", grid=Size(6, 6))
         ui_page1.add(create_ui_text("Power On", 0, 0, size=Size(3, 1), cmd=Commands.ON))
         ui_page1.add(create_ui_text("Power Off", 3, 0, size=Size(3, 1), cmd=Commands.OFF))
@@ -91,7 +91,6 @@ class TrinnovRemote(Remote):
         ui_page2.add(create_ui_text("Native", 3, 2, size=Size(3, 1), cmd=snd5))
         ui_page2.add(create_ui_text("Neural:X", 3, 3, size=Size(3, 1), cmd=snd3))
         ui_page2.add(create_ui_text("Upmix on Native", 3, 4, size=Size(3, 1), cmd=snd6))
-        
 
         return [ui_page1, ui_page2]
 

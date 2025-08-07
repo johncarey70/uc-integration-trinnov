@@ -15,6 +15,8 @@ Supported **media player** commands:
 - Power on
 - Power off
 - Toggle power
+- Input Select
+- Sound Mode Select
 
 Supported **remote** UI:
 
@@ -23,6 +25,8 @@ Supported **remote** UI:
 - Toggle power
 - Directional pad
 - Numeric keypad
+
+Note: Send Command is not implemented in the remote entity, the media_player should be used in Activities
 
 ## Installation
 
