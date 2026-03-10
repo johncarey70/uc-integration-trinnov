@@ -32,6 +32,7 @@ Supported **sensor** Entities:
 - Codec
 - Upmixer
 - Mute Status
+- Remapping Mode
 - Sample Rate
 - Volume dB
 
@@ -40,6 +41,7 @@ Supported **select** Entities :
 - Source
 - Presets
 - Listening Format
+- Remapping Mode
 
 Note: Send Command is not implemented in the remote entity, the media_player should be used in Activities
 
