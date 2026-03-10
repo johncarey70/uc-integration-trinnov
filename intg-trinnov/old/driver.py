@@ -3,24 +3,30 @@
 
 import asyncio
 import logging
-from enum import Enum
-from typing import Any, Type
+from typing import Any
 
 import config
 import ucapi
 from api import api, loop
+from const import EntityPrefix
 from device import Events, TrinnovDevice, TrinnovInfo
 from media_player import TrinnovMediaPlayer
-from registry import (all_devices, connect_all, disconnect_all,
+from registry import (all_devices, clear_devices, connect_all, disconnect_all,
                       get_device, register_device, unregister_device)
-from remote import TrinnovRemote, REMOTE_STATE_MAPPING
-from selects import TrinnovSelect, build_trinnov_selects
-from sensors import TrinnovSensor, build_trinnov_sensors
+from remote import REMOTE_STATE_MAPPING, TrinnovRemote
+from selector import TrinnovPresetsSelect, TrinnovSelect, TrinnovSourcesSelect
+from sensor import TrinnovSensor
 from setup_flow import driver_setup_handler
+from ucapi.media_player import Attributes as MediaAttr
+from ucapi.media_player import States as MediaStates
+from ucapi.select import Attributes as SelectAttr
+from ucapi.select import States as SelectStates
+from ucapi.sensor import Attributes as SensorAttr
+from ucapi.sensor import States as SensorStates
 from utils import setup_logger
-from ucapi.media_player import Attributes as MediaAttr, States
 
 _LOG = logging.getLogger("driver")
+
 
 @api.listens_to(ucapi.Events.CONNECT)
 async def on_connect() -> None:
@@ -63,10 +69,6 @@ async def on_r2_exit_standby() -> None:
     _LOG.debug("Exit standby event: connecting device(s)")
     loop.create_task(connect_all())
 
-def _has_configured_devices() -> bool:
-    """True if there is at least one configured device."""
-    return any(True for _ in config.devices)
-
 @api.listens_to(ucapi.Events.SUBSCRIBE_ENTITIES)
 async def on_subscribe_entities(entity_ids: list[str]) -> None:
     """
@@ -75,16 +77,14 @@ async def on_subscribe_entities(entity_ids: list[str]) -> None:
     :param entity_ids: entity identifiers.
     """
     _LOG.debug("Subscribe entities event: %s", entity_ids)
+
     if not entity_ids:
         return
 
-    if not _has_configured_devices():
-        _LOG.debug("Ignoring subscribe_entities (no configured devices): %s", entity_ids)
-        return
-
+    # Assume all entities share the same device
     first_entity = api.configured_entities.get(entity_ids[0])
     if not first_entity:
-        _LOG.debug("Ignoring subscribe for stale entity %s (not configured)", entity_ids[0])
+        _LOG.error("First entity %s not found in configured_entities", entity_ids[0])
         return
 
     device_id = config.extract_device_id(first_entity)
@@ -94,39 +94,125 @@ async def on_subscribe_entities(entity_ids: list[str]) -> None:
         fallback_device = config.devices.get(device_id)
         if fallback_device:
             _configure_new_trinnov(fallback_device, connect=True)
-            device = get_device(device_id)
         else:
-            _LOG.error("Failed to subscribe entities: no Trinnov configuration found for %s", device_id)
-            return
-
-    if not device:
-        _LOG.debug("Device %s not available after configure", device_id)
+            _LOG.error(
+                "Failed to subscribe entities: no Trinnov configuration found for %s",
+                device_id
+            )
         return
 
     for entity_id in entity_ids:
+        _LOG.debug("entity id = %s", entity_id)
         entity = api.configured_entities.get(entity_id)
         if not entity:
             continue
 
-        if isinstance(entity, (TrinnovSensor, TrinnovSelect)):
-            snapshot = entity.update_attributes(None) or {}
-            if snapshot:
-                merged = dict(entity.attributes or {})
-                merged.update(snapshot)
-                api.configured_entities.update_attributes(entity_id, merged)
+        # Handle TrinnovSensor entities
+        if isinstance(entity, TrinnovSensor):
+            _LOG.info("Setting initial state of Trinnov Sensor %s", entity_id)
 
-        elif isinstance(entity, TrinnovMediaPlayer):
-            api.configured_entities.update_attributes(entity_id, device.attributes)
+            if entity_id.startswith(EntityPrefix.AUDIO_SYNC.value):
+                api.configured_entities.update_attributes(
+                    entity_id,
+                    {
+                        SensorAttr.STATE: SensorStates.ON,
+                        SensorAttr.VALUE: "Synced" if device.audio_sync else "Not synced",
+                        SensorAttr.UNIT: ""
+                    }
+                )
+            elif entity_id.startswith(EntityPrefix.DECODER.value):
+                api.configured_entities.update_attributes(
+                    entity_id,
+                    {
+                        SensorAttr.STATE: SensorStates.ON,
+                        SensorAttr.VALUE: device.decoder,
+                        SensorAttr.UNIT: ""
+                    }
+                )
+            elif entity_id.startswith(EntityPrefix.MUTED.value):
+                api.configured_entities.update_attributes(
+                    entity_id,
+                    {
+                        SensorAttr.STATE: SensorStates.ON,
+                        SensorAttr.VALUE: "Muted" if device.muted else "Unmuted",
+                        SensorAttr.UNIT: ""
+                    }
+                )
+            elif entity_id.startswith(EntityPrefix.SAMPLE_RATE.value):
+                api.configured_entities.update_attributes(
+                    entity_id,
+                    {
+                        SensorAttr.STATE: SensorStates.ON,
+                        SensorAttr.VALUE: device.srate,
+                        SensorAttr.UNIT: "kHz"
+                    }
+                )
+            elif entity_id.startswith(EntityPrefix.UPMIXER.value):
+                api.configured_entities.update_attributes(
+                    entity_id,
+                    {
+                        SensorAttr.STATE: SensorStates.ON,
+                        SensorAttr.VALUE: device.upmixer,
+                        SensorAttr.UNIT: ""
+                    }
+                )
+            elif entity_id.startswith(EntityPrefix.VOLUME.value):
+                api.configured_entities.update_attributes(
+                    entity_id,
+                    {
+                        SensorAttr.STATE: SensorStates.ON,
+                        SensorAttr.VALUE: device.volume,
+                        SensorAttr.UNIT: "dB"
+                    }
+                )
 
-        elif isinstance(entity, TrinnovRemote):
-            api.configured_entities.update_attributes(
-                entity_id,
-                {
-                    ucapi.remote.Attributes.STATE:
-                    REMOTE_STATE_MAPPING.get(device.attributes.get(MediaAttr.STATE, States.UNAVAILABLE))
-                }
-            )
+            current_value = entity.attributes.get(SensorAttr.VALUE, "unknown")
+            _LOG.info("Updated Trinnov Sensor entity %s with value %s", entity_id, current_value)
+            continue
 
+        # Handle TrinnovSelect entities
+        if isinstance(entity, TrinnovSelect):
+            _LOG.info("Setting initial state of Trinnov Select %s", entity_id)
+
+            if entity_id.startswith("presets."):
+                api.configured_entities.update_attributes(
+                    entity_id,
+                    {
+                        SelectAttr.STATE: SelectStates.ON,
+                        SelectAttr.OPTIONS: list(device.preset_list.values()),
+                        #SelectAttr.CURRENT_OPTION: "",
+                    },
+                )
+
+            elif entity_id.startswith("sources."):
+                api.configured_entities.update_attributes(
+                    entity_id,
+                    {
+                        SelectAttr.STATE: SelectStates.ON,
+                        SelectAttr.OPTIONS: list(device.source_list.values()),
+                        #SelectAttr.CURRENT_OPTION: "",
+                    },
+                )
+
+            continue
+
+        # Handle media_player or remote entities
+        _update_entity_attributes(entity_id, entity, device.attributes)
+
+def _update_entity_attributes(entity_id: str, entity, attributes: dict):
+    """
+    Update attributes for the given entity based on its type.
+    """
+    if isinstance(entity, TrinnovMediaPlayer):
+        api.configured_entities.update_attributes(entity_id, attributes)
+    elif isinstance(entity, TrinnovRemote):
+        api.configured_entities.update_attributes(
+            entity_id,
+            {
+                ucapi.remote.Attributes.STATE:
+                REMOTE_STATE_MAPPING.get(attributes.get(MediaAttr.STATE, MediaStates.UNAVAILABLE))
+            }
+        )
 
 @api.listens_to(ucapi.Events.UNSUBSCRIBE_ENTITIES)
 async def on_unsubscribe_entities(entity_ids: list[str]) -> None:
@@ -148,7 +234,7 @@ async def on_unsubscribe_entities(entity_ids: list[str]) -> None:
 
     for entity in remaining_entities:
         device_id = config.extract_device_id(entity)
-        devices_to_remove.discard(device_id)
+        devices_to_remove.discard(device_id)  # discard safely removes if present
 
     # Disconnect and clean up devices no longer in use
     for device_id in devices_to_remove:
@@ -156,10 +242,6 @@ async def on_unsubscribe_entities(entity_ids: list[str]) -> None:
             device = get_device(device_id)
             await device.disconnect()
             device.events.remove_all_listeners()
-
-def filter_attributes(attributes: dict, attribute_type: Type[Enum]) -> dict[str, Any]:
-    """Filter attributes based on an Enum class."""
-    return {k: v for k, v in attributes.items() if k in attribute_type}
 
 def _configure_new_trinnov(info: TrinnovInfo, connect: bool = False) -> None:
     """
@@ -176,8 +258,7 @@ def _configure_new_trinnov(info: TrinnovInfo, connect: bool = False) -> None:
 
     device = get_device(info.id)
     if device:
-        if not connect:
-            loop.create_task(device.disconnect())
+        loop.create_task(device.disconnect())
     else:
         device = TrinnovDevice(info.ip, info.mac, device_id=info.id)
 
@@ -194,33 +275,41 @@ def _configure_new_trinnov(info: TrinnovInfo, connect: bool = False) -> None:
 
 def _register_available_entities(info: TrinnovInfo, device: TrinnovDevice) -> None:
     """
-    Register remote, media player, sensors, and selects for a Trinnov device.
+    Register remote and media player entities for a Trinnov device and associate its device.
 
     :param info: Trinnov configuration
     :param device: Active TrinnovDevice for the device
     """
-    def _add(entity) -> None:
+    for entity_cls in (TrinnovRemote, TrinnovMediaPlayer):
+        entity = entity_cls(info, device)
+
         if api.available_entities.contains(entity.id):
             api.available_entities.remove(entity.id)
+
         api.available_entities.add(entity)
 
-    # Remote + Media Player
-    for entity_cls in (TrinnovRemote, TrinnovMediaPlayer):
-        _add(entity_cls(info, device))
+    for sensor in [
+        EntityPrefix.AUDIO_SYNC,
+        EntityPrefix.DECODER,
+        EntityPrefix.MUTED,
+        EntityPrefix.SAMPLE_RATE,
+        EntityPrefix.UPMIXER,
+        EntityPrefix.VOLUME,
+        ]:
+        entity = TrinnovSensor(info, sensor.value)
 
-    device_id = getattr(info, "id", None)
-    if not device_id:
-        raise ValueError("TrinnovInfo.id is required to register entities")
+        if api.available_entities.contains(entity.id):
+            api.available_entities.remove(entity.id)
 
-    device_name = info.name
+        api.available_entities.add(entity)
 
-    # Sensors
-    for entity in build_trinnov_sensors(device_id, device_name, device):
-        _add(entity)
+    for entity_cls in (TrinnovPresetsSelect, TrinnovSourcesSelect):
+        entity = entity_cls(info, device)
 
-    # Selects
-    for entity in build_trinnov_selects(device_id, device_name, device):
-        _add(entity)
+        if api.available_entities.contains(entity.id):
+            api.available_entities.remove(entity.id)
+
+        api.available_entities.add(entity)
 
 async def on_trinnov_connected(device_id: str):
     """Handle Trinnov connection."""
@@ -252,13 +341,13 @@ async def on_trinnov_update(entity_id: str, update: dict[str, Any] | None) -> No
     if update is None:
         return
 
-    _LOG.debug("UPDATE keys: %s", list(update.keys()))
-
-
     device_id = entity_id.split(".", 1)[1]
     device = get_device(device_id)
     if device is None:
         return
+
+    _LOG.warning("[%s] Trinnov update: %s", device_id, update)
+    _LOG.warning(f"{entity_id}\n")
 
     entity: TrinnovMediaPlayer | TrinnovRemote | TrinnovSensor | TrinnovSelect | None = (
         api.configured_entities.get(entity_id)
@@ -267,11 +356,7 @@ async def on_trinnov_update(entity_id: str, update: dict[str, Any] | None) -> No
         _LOG.debug("Entity %s not found", entity_id)
         return
 
-    if isinstance(entity, (TrinnovMediaPlayer, TrinnovRemote)):
-        changed_attrs = entity.filter_changed_attributes(update)
-    else:
-        changed_attrs = entity.update_attributes(update) or {}
-
+    changed_attrs = entity.filter_changed_attributes(update)
     if changed_attrs:
         merged = dict(entity.attributes or {})
         merged.update(changed_attrs)
@@ -290,32 +375,24 @@ def on_device_added(info: TrinnovInfo) -> None:
 
 def on_device_removed(info: TrinnovInfo | None) -> None:
     """Handle removal of a Trinnov device from config."""
-    _LOG.warning("on_device_removed")
-
     if info is None:
-        _LOG.debug("Configuration cleared, removing all configured Trinnov instances one by one")
-
-        for device_id in list(all_devices()):
-            device = get_device(device_id)
-            if device:
-                loop.create_task(_async_remove(device))
-
-            _remove_trinnov_entities(device_id)
-            unregister_device(device_id)
-            _LOG.info("Device for device_id %s cleaned up", device_id)
-
+        _LOG.info("All devices cleared from config.")
+        clear_devices()
         api.configured_entities.clear()
         api.available_entities.clear()
-
-        _LOG.info("All devices cleared from config.")
         return
 
     device_id = info.id
+
+    # Disconnect while the device still exists in registry
     device = get_device(device_id)
     if device:
         loop.create_task(_async_remove(device))
 
+    # Remove ALL entities for this device_id (not just media_player/remote)
     _remove_trinnov_entities(device_id)
+
+    # Finally unregister the device
     unregister_device(device_id)
     _LOG.info("Device for device_id %s cleaned up", device_id)
 
@@ -324,6 +401,7 @@ def _remove_trinnov_entities(device_id: str) -> None:
     suffix = f".{device_id}"
     _LOG.debug("_remove_trinnov_entities %s", device_id)
 
+    # Remove from configured
     for e in list(api.configured_entities.get_all()):
         eid = e.get("entity_id")
         if isinstance(eid, str) and eid.endswith(suffix):
@@ -332,6 +410,7 @@ def _remove_trinnov_entities(device_id: str) -> None:
             except Exception:
                 pass
 
+    # Remove from available
     for e in list(api.available_entities.get_all()):
         eid = e.get("entity_id")
         if isinstance(eid, str) and eid.endswith(suffix):
@@ -343,8 +422,8 @@ def _remove_trinnov_entities(device_id: str) -> None:
 async def _async_remove(device: TrinnovDevice) -> None:
     """Disconnect from receiver and remove all listeners."""
     _LOG.debug("Disconnecting and removing all listeners")
-    device.events.remove_all_listeners()
     await device.disconnect()
+    device.events.remove_all_listeners()
 
 async def main():
     """Start the Remote Two integration driver."""

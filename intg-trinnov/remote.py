@@ -8,6 +8,7 @@ Remote entity functions.
 import logging
 from typing import Any
 
+from config import TrinnovEntity
 from const import EntityPrefix, RemoteDef
 from const import SimpleCommands as cmds
 from device import TrinnovDevice, TrinnovInfo
@@ -29,15 +30,18 @@ REMOTE_STATE_MAPPING = {
     MediaStates.UNKNOWN: States.UNKNOWN,
 }
 
-class TrinnovRemote(Remote):
+class TrinnovRemote(Remote, TrinnovEntity):
     """Representation of a Trinnov Remote entity."""
 
     def __init__(self, info: TrinnovInfo, device: TrinnovDevice):
         """Initialize the class."""
         self._device = device
+        self._device_id = info.id
+
         entity_id = f"{EntityPrefix.REMOTE.value}.{info.id}"
         features = RemoteDef.features
         attributes = RemoteDef.attributes
+
         super().__init__(
             entity_id,
             f"{info.name} Remote",
@@ -45,17 +49,19 @@ class TrinnovRemote(Remote):
             attributes,
             simple_commands=RemoteDef.simple_commands,
             button_mapping=self.create_button_mappings(),
-            ui_pages=self.create_ui()
+            ui_pages=self.create_ui(),
         )
 
-        _LOG.debug("TrinnovRemote init %s : %s", entity_id, attributes)
+    @property
+    def deviceid(self) -> str:
+        return self._device_id
 
     def create_button_mappings(self) -> list[DeviceButtonMapping | dict[str, Any]]:
         """Create button mappings."""
         return [
             create_btn_mapping(Buttons.MUTE, cmds.MUTE_TOGGLE),
-            create_btn_mapping(Buttons.VOLUME_DOWN, cmds.VOLUME_DOWN),
-            create_btn_mapping(Buttons.VOLUME_UP, cmds.VOLUME_UP),
+            create_btn_mapping(Buttons.VOLUME_DOWN, cmds.VOLUME_DOWN, long=None),
+            create_btn_mapping(Buttons.VOLUME_UP, cmds.VOLUME_UP, long=None),
         ]
 
     def create_ui(self) -> list[UiPage | dict[str, Any]]:
@@ -94,7 +100,7 @@ class TrinnovRemote(Remote):
 
         return [ui_page1, ui_page2]
 
-    async def command(self, cmd_id: str, params: dict[str, Any] | None = None) -> StatusCodes:
+    async def command(self, cmd_id: str, params: dict[str, Any] | None = None, *, websocket: Any) -> StatusCodes:
         """
         Handle command requests from the integration API for the remote entity.
         """
@@ -150,6 +156,7 @@ class TrinnovRemote(Remote):
                         if actual_cmd:
                             _LOG.debug(actual_cmd)
                             _LOG.debug(params)
+
                             status = await self._device.send_command(actual_cmd, cmd_params)
                     else:
                         _LOG.warning("Unknown command: %s", simple_cmd)
@@ -165,9 +172,11 @@ class TrinnovRemote(Remote):
                         except (IndexError, ValueError):
                             status = StatusCodes.BAD_REQUEST
                     elif commands and commands[0] == "select_sound_mode":
-                        mode_key = commands[1]
-                        await self._device.executor.upmixer(mode_key)
-                        status = StatusCodes.OK
+                        try:
+                            mode_key = str(commands[1])
+                        except (IndexError, TypeError):
+                            return StatusCodes.BAD_REQUEST
+                        status = await self._device.select_sound_mode(mode_key)
                     else:
                         status = StatusCodes.NOT_IMPLEMENTED
 

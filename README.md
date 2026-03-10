@@ -26,6 +26,21 @@ Supported **remote** UI:
 - Directional pad
 - Numeric keypad
 
+Supported **sensor** Entities:
+
+- Audio Sync
+- Codec
+- Upmixer
+- Mute Status
+- Sample Rate
+- Volume dB
+
+Supported **select** Entities :
+
+- Source
+- Presets
+- Listening Format
+
 Note: Send Command is not implemented in the remote entity, the media_player should be used in Activities
 
 ## Installation

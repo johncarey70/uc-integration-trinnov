@@ -1,37 +1,24 @@
 #!/usr/bin/env python3
-
-"""
-Trinnov Altitude Network Discovery Tool
-
-This script uses Zeroconf (mDNS) to discover a Trinnov Altitude device
-on the local network that advertises the _trinnovtelnet._tcp.local. service.
-
-Discovery stops as soon as one device is found.
-
-Dependencies:
-    pip install zeroconf
-"""
+"""Discover Trinnov Altitude devices via Zeroconf."""
 
 import asyncio
+import json
 import logging
 import socket
 import threading
+import time
 from dataclasses import dataclass
 
-from pytrinnov.models.base import ConfigStatus, EthernetStatus
-from pytrinnov.models.constants import WS_CONFIG, WS_ETHERNET
-from pytrinnov.trinnov.websocket import DeviceError, WebSocketClient
 from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
 
 _LOG = logging.getLogger(__name__)
 
 SERVICE_TYPES = ["_trinnovtelnet._tcp.local."]
 
-@dataclass
+
+@dataclass(frozen=True)
 class TrinnovDeviceInfo:
-    """
-    Represents a discovered Trinnov device with IP, port, hostname, and TXT records.
-    """
+    """Represents a discovered Trinnov device."""
     ip: str
     port: int
     hostname: str
@@ -39,147 +26,141 @@ class TrinnovDeviceInfo:
 
 
 class TrinnovListener(ServiceListener):
-    """
-    Zeroconf listener that captures and records the first Trinnov device found.
-    """
+    """Collects all discovered Trinnov devices."""
 
-    def __init__(self, zeroconf: Zeroconf, stop_event: threading.Event) -> None:
+    def __init__(self) -> None:
+        """Initialize listener state."""
+        self._lock = threading.Lock()
+        self._seen: set[tuple[str, str, int]] = set()
         self.found: list[TrinnovDeviceInfo] = []
-        self.zeroconf = zeroconf
-        self.stop_event = stop_event
 
     def remove_service(self, zc: Zeroconf, type_: str, name: str) -> None:
-        """Not implemented (required abstract method)."""
+        """Ignore service removal events."""
+        return
 
     def update_service(self, zc: Zeroconf, type_: str, name: str) -> None:
-        """Not implemented (required abstract method)."""
+        """Handle service updates as adds."""
+        self.add_service(zc, type_, name)
 
     def add_service(self, zc: Zeroconf, type_: str, name: str) -> None:
-        """Called when a matching mDNS service is discovered."""
-        if self.stop_event.is_set():
-            return
-
+        """Process a newly discovered service."""
         info = zc.get_service_info(type_, name)
         if not info or not info.addresses:
             return
 
-        ip = socket.inet_ntoa(info.addresses[0])
+        ip = None
+        for addr in info.addresses:
+            if len(addr) == 4:
+                ip = socket.inet_ntoa(addr)
+                break
+
+        if ip is None:
+            return
+
         hostname = info.server.rstrip(".") if info.server else "unknown"
 
         txt: dict[str, str] = {}
         for k, v in info.properties.items():
             try:
-                key = k.decode() if isinstance(k, bytes) else str(k)
-                val = v.decode() if isinstance(v, bytes) else str(v)
+                key = k.decode() if isinstance(k, (bytes, bytearray)) else str(k)
+                val = v.decode() if isinstance(v, (bytes, bytearray)) else str(v)
                 txt[key] = val
-            except UnicodeDecodeError as ex:
-                _LOG.debug("Failed to decode TXT record: %s", ex)
+            except UnicodeDecodeError:
                 continue
 
+        key = (name, ip, info.port)
+
+        with self._lock:
+            if key in self._seen:
+                return
+            self._seen.add(key)
+            self.found.append(
+                TrinnovDeviceInfo(
+                    ip=ip,
+                    port=info.port,
+                    hostname=hostname,
+                    txt_records=txt,
+                )
+            )
+
         _LOG.info("Found Trinnov: %s @ %s:%d", hostname, ip, info.port)
-        if txt:
-            _LOG.debug("  TXT Records: %s", txt)
-
-        self.found.append(
-            TrinnovDeviceInfo(ip=ip, port=info.port, hostname=hostname, txt_records=txt)
-        )
-        self.stop_event.set()
-        self.zeroconf.close()
 
 
-def discover_trinnov_devices(timeout: int = 5) -> list[TrinnovDeviceInfo]:
-    """
-    Perform mDNS discovery of Trinnov devices using Zeroconf.
-    Stops as soon as the first device is found.
-
-    Args:
-        timeout: How long to wait for discovery if no device is found.
-
-    Returns:
-        A list containing one TrinnovDeviceInfo if found, else an empty list.
-    """
+def discover_trinnov_devices(
+    timeout: float = 5.0,
+    settle_time: float = 0.25,
+) -> list[TrinnovDeviceInfo]:
+    """Discover Trinnov devices and exit early once discovery settles."""
     zeroconf = Zeroconf()
-    stop_event = threading.Event()
-    listener = TrinnovListener(zeroconf, stop_event)
+    listener = TrinnovListener()
 
-    _LOG.info("Searching for Trinnov device via mDNS...")
-    _ = [ServiceBrowser(zeroconf, stype, listener) for stype in SERVICE_TYPES]
+    _LOG.info("Searching for Trinnov devices via mDNS...")
 
-    stop_event.wait(timeout=timeout)
+    browsers = [ServiceBrowser(zeroconf, stype, listener) for stype in SERVICE_TYPES]
 
-    if not listener.found:
-        _LOG.warning("No Trinnov device found via mDNS.")
+    start = time.monotonic()
+    last_count = 0
+    last_change = start
+
+    try:
+        while True:
+            now = time.monotonic()
+            count = len(listener.found)
+
+            # Track when device count changes
+            if count != last_count:
+                last_count = count
+                last_change = now
+
+            # Exit when discovery has settled
+            if count > 0 and (now - last_change) >= settle_time:
+                break
+
+            # Exit on hard timeout
+            if now - start >= timeout:
+                break
+
+            time.sleep(0.05)
+
+    finally:
+        for b in browsers:
+            try:
+                b.cancel()
+            except Exception:
+                pass
+        zeroconf.close()
+
     return listener.found
 
-
-def get_hostname(ip_address: str) -> str:
-    """
-    Resolve the hostname for a given IP address using reverse DNS lookup.
-
-    Args:
-        ip_address (str): The IPv4 or IPv6 address to resolve.
-
-    Returns:
-        str: The resolved hostname, or None if resolution fails.
-    """
-    try:
-        hostname, _, _ = socket.gethostbyaddr(ip_address)
-        return hostname
-    except socket.herror:
-        return None
-
-
-async def fetch_manual_device_info(ip: str) -> dict:
-    """
-    Fetch device info using WebSocket when manual IP/port are provided.
-
-    Args:
-        ip (str): Device IP address.
-        port (int): Device WebSocket port.
-
-    Returns:
-        dict: Dictionary containing device information fields.
-    """
-    messages = [
-        (WS_CONFIG, 1, None),
-        (WS_ETHERNET, 1, None)
-    ]
-
-    try:
-        async with WebSocketClient(ip) as client:
-            responses = await client.send_and_receive(messages)
-
-            config: ConfigStatus = responses.get(WS_CONFIG)
-            _LOG.debug(ConfigStatus)
-            ethernet: EthernetStatus = responses.get(WS_ETHERNET)
-            _LOG.debug(ethernet)
-
-            hostname = get_hostname(ip)
-
-            return {
-                "ip": ip,
-                "mac": ethernet.macaddr if ethernet else None,
-                "model": config.class_name if config else None,
-                "version": config.release if config else None,
-                "srpid": str(config.product_id) if config else None,
-                "name": hostname if hostname else "Unknown",
+def devices_to_json(devices: list[TrinnovDeviceInfo]) -> str:
+    """Return discovered devices as pretty-printed JSON."""
+    return json.dumps(
+        [
+            {
+                "ip": d.ip,
+                "port": d.port,
+                "hostname": d.hostname,
+                "txt_records": d.txt_records,
             }
+            for d in devices
+        ],
+        indent=4,
+        sort_keys=True,
+    )
 
-    except DeviceError as e:
-        _LOG.error("WebSocket device info fetch failed: %s", e)
-        return {}
-
-
-async def main():
-    """
-    Asynchronously run discovery and print the Trinnov device found.
-    """
+async def main() -> None:
+    """Run discovery and log results."""
     logging.basicConfig(level=logging.INFO)
 
-    devices_list = await asyncio.to_thread(discover_trinnov_devices)
-    if devices_list:
-        device = devices_list[0]
-        _LOG.info(device)
+    devices = await asyncio.to_thread(
+        discover_trinnov_devices,
+        timeout=5.0,
+        settle_time=0.25,
+    )
+
+    _LOG.info("Discovered devices:\n%s", devices_to_json(devices))
+
+
 
 if __name__ == "__main__":
     asyncio.run(main())

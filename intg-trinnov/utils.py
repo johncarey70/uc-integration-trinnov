@@ -11,10 +11,11 @@ def setup_logger():
     """Get logger from all modules"""
 
     level = os.getenv("UC_LOG_LEVEL", "DEBUG").upper()
+    warning = os.getenv("UC_LOG_LEVEL", "WARNING").upper()
 
-    logging.getLogger("ucapi.api").setLevel(level)
-    logging.getLogger("ucapi.entities").setLevel(level)
-    logging.getLogger("ucapi.entity").setLevel(level)
+    logging.getLogger("ucapi.api").setLevel(warning)
+    logging.getLogger("ucapi.entities").setLevel(warning)
+    logging.getLogger("ucapi.entity").setLevel(warning)
     logging.getLogger("driver").setLevel(level)
     logging.getLogger("config").setLevel(level)
     logging.getLogger("discover").setLevel(level)
@@ -22,8 +23,9 @@ def setup_logger():
     logging.getLogger("device").setLevel(level)
     logging.getLogger("remote").setLevel(level)
     logging.getLogger("media_player").setLevel(level)
-    logging.getLogger("sensor").setLevel(level)
-    #logging.getLogger("pytrinnov").setLevel(level)
+    logging.getLogger("sensors").setLevel(level)
+    logging.getLogger("selects").setLevel(level)
+    logging.getLogger("pytrinnov").setLevel(warning)
 
 
 
@@ -72,3 +74,8 @@ def parse_toggle_command(prefix: str, simple_cmd: str) -> tuple[str, str] | None
     if code is not None:
         return prefix, str(code)
     return None
+
+def _qualify_name(device_name: str, base: str | dict[str, str]) -> str | dict[str, str]:
+    if isinstance(base, dict):
+        return {lang: f"{device_name} {txt}" for lang, txt in base.items()}
+    return f"{device_name} {base}"

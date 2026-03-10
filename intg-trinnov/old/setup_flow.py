@@ -5,25 +5,20 @@ Handles user interaction, automatic discovery of Trinnov devices,
 and device onboarding into the system.
 """
 
-# pylint: disable=too-many-return-statements
-
-from __future__ import annotations
-
 import asyncio
 import logging
-from typing import Any
 
 import config
 import ucapi
 from api import api
 from device import TrinnovInfo
-from discover import TrinnovDeviceInfo, discover_trinnov_devices
+from discover import discover_trinnov_devices, TrinnovDeviceInfo
 from registry import clear_devices
 
 _LOG = logging.getLogger(__name__)
 
-# Cache discovered devices by SRPID for the current setup session.
-_DISCOVERED_BY_SRPID: dict[str, TrinnovDeviceInfo] = {}
+# Cache discovered devices by IP for the current setup session
+_DISCOVERED_BY_IP: dict[str, object] = {}
 
 
 def _txt(txt: dict[str, str] | None, key: str) -> str | None:
@@ -33,59 +28,35 @@ def _txt(txt: dict[str, str] | None, key: str) -> str | None:
     v = txt.get(key)
     return v if v else None
 
-
 def _fw_version(txt: dict[str, str] | None) -> str | None:
     """Return firmware version from either CI or legacy key."""
     return _txt(txt, "system_release") or _txt(txt, "version")
 
+def _select_ip_form(devices_list: list[object]) -> ucapi.RequestUserInput:
+    """Show dropdown of discovered Trinnov devices."""
+    _LOG.critical("_select_ip_form %s", devices_list)
+    _DISCOVERED_BY_IP.clear()
 
-def _srpid(device: TrinnovDeviceInfo) -> str:
-    """Return SRPID (unique identifier) for a discovered device."""
-    return _txt(device.txt_records, "srpid") or ""
+    dropdown_devices: list[dict] = []
 
-
-def _select_device_form(devices_list: list[TrinnovDeviceInfo]) -> ucapi.RequestUserInput:
-    """Show dropdown of discovered Trinnov devices (keyed by SRPID)."""
-    _DISCOVERED_BY_SRPID.clear()
-
-    configured_srpids = {d.id for d in config.devices if getattr(d, "id", None)}
-
-    dropdown_devices: list[dict[str, Any]] = []
+    d: TrinnovDeviceInfo = None
     for d in devices_list:
-        srpid = _srpid(d)
-        if not srpid:
-            # Ignore devices without SRPID; we can't safely key them.
-            continue
-        if srpid in configured_srpids:
-            # Reconfigure->Add: exclude already configured devices by SRPID.
-            continue
-
-        _DISCOVERED_BY_SRPID[srpid] = d
+        _DISCOVERED_BY_IP[d.ip] = d
 
         model = _txt(d.txt_records, "machine_class_name") or "Trinnov"
         hostname = d.hostname or "Unknown"
+
         label = f"{model} ({hostname} - {d.ip})"
 
         dropdown_devices.append(
-            {"id": srpid, "label": {"en": label, "de": label, "fr": label}}
-        )
-
-    if not dropdown_devices:
-        return ucapi.RequestUserInput(
-            {"en": "Select Trinnov Device"},
-            [
-                {
-                    "id": "info",
-                    "label": {"en": "Discovered Trinnov Devices"},
-                    "field": {
-                        "label": {
-                            "value": {
-                                "en": "No new Trinnov devices found (all discovered devices are already configured)."
-                            }
-                        }
-                    },
-                }
-            ],
+            {
+                "id": d.ip,
+                "label": {
+                    "en": label,
+                    "de": label,
+                    "fr": label,
+                },
+            }
         )
 
     return ucapi.RequestUserInput(
@@ -109,39 +80,58 @@ def _select_device_form(devices_list: list[TrinnovDeviceInfo]) -> ucapi.RequestU
                                 "Select the Trinnov processor you want to configure.\n\n"
                                 "Hostname, model, and IP address are shown for identification."
                             ),
-                            "de": "Wählen Sie den Trinnov Prozessor aus, den Sie konfigurieren möchten.",
-                            "fr": "Sélectionnez le processeur Trinnov que vous souhaitez configurer.",
+                            "de": (
+                                "Wählen Sie den Trinnov Prozessor aus, den Sie konfigurieren möchten."
+                            ),
+                            "fr": (
+                                "Sélectionnez le processeur Trinnov que vous souhaitez configurer."
+                            ),
                         }
                     }
                 },
             },
+
             {
-                "field": {"dropdown": {"value": dropdown_devices[0]["id"], "items": dropdown_devices}},
-                "id": "srpid",
-                "label": {"en": "Device", "de": "Gerät", "fr": "Appareil"},
+                "field": {
+                    "dropdown": {
+                        "value": dropdown_devices[0]["id"],
+                        "items": dropdown_devices,
+                    }
+                },
+                "id": "ip",
+                "label": {
+                    "en": "Device",
+                    "de": "Gerät",
+                    "fr": "Appareil",
+                },
             },
         ],
     )
 
-
 def _single_device_form(device: TrinnovDeviceInfo) -> ucapi.RequestUserInput:
     """Device info / review page."""
     version = _fw_version(device.txt_records)
-    model = _txt(device.txt_records, "machine_class_name") or "Unknown"
-    mac = _txt(device.txt_records, "id") or "Unknown"
-    srpid = _srpid(device) or "Unknown"
+
 
     return ucapi.RequestUserInput(
-        {"en": "Review Trinnov Device", "de": "Trinnov Gerät prüfen", "fr": "Vérifiez l'appareil Trinnov"},
+        {
+            "en": "Review Trinnov Device",
+            "de": "Trinnov Gerät prüfen",
+            "fr": "Vérifiez l'appareil Trinnov",
+        },
         [
             {
                 "id": "info",
-                "label": {"en": "Confirm device details", "de": "Gerätedetails bestätigen", "fr": "Confirmez les détails"},
+                "label": {
+                    "en": "Confirm device details",
+                    "de": "Gerätedetails bestätigen",
+                    "fr": "Confirmez les détails",
+                },
                 "field": {
                     "label": {
                         "value": {
                             "en": (
-                                "Please confirm this is the Trinnov you want to configure:\n\n"
+                                f"Please confirm this is the Trinnov you want to configure:\n\n"
                                 "Click Next to finish setup."
                             ),
                             "de": (
@@ -156,19 +146,87 @@ def _single_device_form(device: TrinnovDeviceInfo) -> ucapi.RequestUserInput:
                     }
                 },
             },
-            {"id": "ip", "label": {"en": "IP Address:"}, "field": {"text": {"value": device.ip}}},
-            {"id": "port", "label": {"en": "TCP Port:"}, "field": {"number": {"value": device.port}}},
-            {"id": "hostname", "label": {"en": "Hostname:"}, "field": {"text": {"value": device.hostname}}},
-            {"id": "mac", "label": {"en": "Mac Address:"}, "field": {"text": {"value": mac}}},
-            {"id": "model", "label": {"en": "Model:"}, "field": {"text": {"value": model}}},
-            {"id": "version", "label": {"en": "Firmware Version:"}, "field": {"text": {"value": version or "Unknown"}}},
-            {"id": "srpid", "label": {"en": "SRPID:"}, "field": {"text": {"value": srpid}}},
+
+            {
+                "id": "ip",
+                "label": {"en": "IP Address:"},
+                "field": {"text": {"value": device.ip}},
+            },
+            {
+                "id": "port",
+                "label": {"en": "TCP Port:"},
+                "field": {"number": {"value": device.port}},
+            },
+            {
+                "id": "hostname",
+                "label": {"en": "Hostname:"},
+                "field": {"text": {"value": device.hostname}},
+            },
+            {
+                "id": "mac",
+                "label": {"en": "Mac Address:"},
+                "field": {"text": {"value": _txt(device.txt_records, "id") or "Unknown"}},
+            },
+            {
+                "id": "model",
+                "label": {"en": "Model:"},
+                "field": {"text": {"value": _txt(device.txt_records, "machine_class_name") or "Unknown"}},
+            },
+            {
+                "id": "version",
+                "label": {"en": "Firmware Version:"},
+                "field": {"text": {"value": version or "Unknown"}},
+            },
+            {
+                "id": "srpid",
+                "label": {"en": "SRPID:"},
+                "field": {"text": {"value": _txt(device.txt_records, "srpid") or "Unknown"}},
+            },
         ],
     )
 
+async def _confirm_device_form(msg: ucapi.UserDataResponse) -> ucapi.RequestUserInput:
+    """Second page: confirm the chosen device details (populated from discovery)."""
+    _LOG.critical("_confirm_device_form %s", msg)
+    return ucapi.RequestUserInput(
+        {"en": "Confirm Trinnov"},
+        [
+            {
+                "id": "ip",
+                "label": {"en": "Using Trinnov IP Address:"},
+                "field": {"text": {"value": msg.input_values.get("ip")}},
+            },
+            {
+                "id": "hostname",
+                "label": {"en": "Hostname:"},
+                "field": {"text": {"value": msg.input_values.get("name")}},
+            },
+            {
+                "id": "mac",
+                "label": {"en": "Mac Address:"},
+                "field": {"text": {"value": msg.input_values.get("mac")}},
+            },
+            {
+                "id": "model",
+                "label": {"en": "Model:"},
+                "field": {"text": {"value": msg.input_values.get("model")}},
+            },
+            {
+                "id": "version",
+                "label": {"en": "Firmware Version:"},
+                "field": {"text": {"value": msg.input_values.get("version")}},
+            },
+            {
+                "id": "srpid",
+                "label": {"en": "SRPID:"},
+                "field": {"text": {"value": msg.input_values.get("srpid")}},
+            },
+        ],
+    )
 
 async def driver_setup_handler(msg: ucapi.SetupDriver) -> ucapi.SetupAction:
     """Main entry point for setup-related UCAPI messages."""
+    _LOG.critical("driver setup handler %s", msg)
     if isinstance(msg, ucapi.DriverSetupRequest):
         return await handle_driver_setup(msg)
     if isinstance(msg, ucapi.UserDataResponse):
@@ -180,17 +238,13 @@ async def driver_setup_handler(msg: ucapi.SetupDriver) -> ucapi.SetupAction:
     _LOG.error("Error during setup")
     return ucapi.SetupError()
 
-
 async def handle_driver_setup(msg: ucapi.DriverSetupRequest) -> ucapi.SetupAction:
     """Handle initial setup or reconfiguration request from the user."""
-
+    _LOG.critical("handle driver setup %s", msg)
     if msg.reconfigure:
         _LOG.info("Starting reconfiguration")
         return _reconfigure_menu_form()
 
-    await asyncio.sleep(1)
-
-    # Initial setup starts from scratch.
     api.available_entities.clear()
     api.configured_entities.clear()
 
@@ -199,36 +253,19 @@ async def handle_driver_setup(msg: ucapi.DriverSetupRequest) -> ucapi.SetupActio
         return ucapi.SetupError()
 
     if len(devices_list) > 1:
-        return _select_device_form(devices_list)
+        return _select_ip_form(devices_list)
 
     device = devices_list[0]
     _LOG.info("Using Trinnov ip: %s, port: %i", device.ip, device.port)
     return _single_device_form(device)
 
-
 async def handle_user_data_response(msg: ucapi.UserDataResponse) -> ucapi.SetupAction:
-    """Handle the user's submitted data and complete setup.
+    """Handle the user's submitted data and complete setup."""
+    # If mac is missing, this is the multi-device selection page (dropdown).
+    # Next page should be the device info page (prefilled), NOT SetupComplete.
 
-    UCAPI may include stale values from prior pages in msg.input_values.
-    Route by the most specific keys first:
-      1) discovered-device selection (srpid-only page)
-      2) reconfigure menu (action/choice)
-      3) final review submit (port/mac/etc)
-    """
-    selected_srpid = msg.input_values.get("srpid")
-
-    # 1) Discovered devices dropdown submit:
-    # It has "srpid" and typically does NOT have "port".
-    if selected_srpid and selected_srpid in _DISCOVERED_BY_SRPID and "port" not in msg.input_values:
-        device = _DISCOVERED_BY_SRPID.get(selected_srpid)
-        if not device:
-            _LOG.error("Selected SRPID %r not in discovered devices", selected_srpid)
-            return ucapi.SetupError()
-        _LOG.info("Selected Trinnov from dropdown: %s", selected_srpid)
-        return _single_device_form(device)
-
-    # 2) Reconfigure menu submit (only when we're not selecting a discovered device)
-    if "action" in msg.input_values and selected_srpid not in _DISCOVERED_BY_SRPID:
+    # Reconfigure menu submit
+    if "action" in msg.input_values:
         action = msg.input_values.get("action")
         choice = msg.input_values.get("choice", "")
 
@@ -237,7 +274,7 @@ async def handle_user_data_response(msg: ucapi.UserDataResponse) -> ucapi.SetupA
             if not devices_list:
                 return ucapi.SetupError()
             if len(devices_list) > 1:
-                return _select_device_form(devices_list)
+                return _select_ip_form(devices_list)
             return _single_device_form(devices_list[0])
 
         if action == "remove":
@@ -255,20 +292,22 @@ async def handle_user_data_response(msg: ucapi.UserDataResponse) -> ucapi.SetupA
         _LOG.error("Unknown configuration action: %s", action)
         return ucapi.SetupError()
 
-    # 3) Final review/confirm submit:
-    # Must include srpid + mac (and port is present on that page).
-    if not msg.input_values.get("mac") or not selected_srpid:
-        _LOG.error("Unexpected setup input_values: %s", msg.input_values)
-        return ucapi.SetupError()
+    if not msg.input_values.get("mac"):
+        ip = msg.input_values.get("ip")
+
+        device = _DISCOVERED_BY_IP.get(ip)
+        if not device:
+            _LOG.error("Selected IP %r not in discovered devices", ip)
+            return ucapi.SetupError()
+
+        _LOG.info("Selected Trinnov from dropdown: %s", ip)
+        return _single_device_form(device)
 
     fields = ("srpid", "ip", "model", "mac", "version")
     srpid, ip, model, mac, version = (msg.input_values.get(k, "Unknown") for k in fields)
     name = f"Trinnov {model}"
 
-    # Initial setup clears entity registries; reconfigure does not.
-    is_initial_setup = len(api.configured_entities.get_all()) == 0 and len(api.available_entities.get_all()) == 0
-    if is_initial_setup:
-        config.devices.clear()
+    config.devices.clear()
 
     dv_info = TrinnovInfo(
         id=srpid,
@@ -278,19 +317,27 @@ async def handle_user_data_response(msg: ucapi.UserDataResponse) -> ucapi.SetupA
         model_name=model,
         software_version=version,
     )
+
     config.devices.add(dv_info)
 
     _LOG.info("Setup complete")
     return ucapi.SetupComplete()
 
-
 def _reconfigure_menu_form() -> ucapi.RequestUserInput:
     """Reconfigure flow: choose an existing configured device and an action."""
-    dropdown_devices: list[dict[str, Any]] = [
-        {"id": d.id, "label": {"en": f"{d.name} ({d.ip})"}} for d in config.devices
-    ]
+    # Build configured device dropdown
+    dropdown_devices: list[dict] = []
+    for d in config.devices:
+        dropdown_devices.append(
+            {
+                "id": d.id,
+                "label": {"en": f"{d.name} ({d.ip})"},
+            }
+        )
 
-    dropdown_actions: list[dict[str, Any]] = [{"id": "add", "label": {"en": "Add a new device"}}]
+    dropdown_actions: list[dict] = [
+        {"id": "add", "label": {"en": "Add a new device"}},
+    ]
 
     if dropdown_devices:
         dropdown_actions.extend(

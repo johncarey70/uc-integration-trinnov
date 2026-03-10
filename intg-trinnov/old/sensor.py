@@ -8,12 +8,13 @@ Sensor entity functions.
 import logging
 from typing import Any
 
+from config import TrinnovEntity
 from device import TrinnovInfo
 from ucapi.sensor import Attributes, DeviceClasses, Options, Sensor, States
 
 _LOG = logging.getLogger(__name__)
 
-class TrinnovSensor(Sensor):
+class TrinnovSensor(TrinnovEntity, Sensor):
     """Representation of a Trinnov Sensor entity."""
 
     def __init__(self, info: TrinnovInfo, sensor: str):
@@ -22,7 +23,7 @@ class TrinnovSensor(Sensor):
 
         """
         entity_id = f"{sensor}.{info.id}"
-        name = "Trinnov " + sensor.replace("_", " ").title()
+        name = f"Trinnov ({info.id}) {sensor.replace('_', ' ').title()}"
 
         attributes = {
             Attributes.STATE: States.UNKNOWN,

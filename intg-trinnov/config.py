@@ -24,9 +24,17 @@ from typing import Iterator
 
 import ucapi
 from device import TrinnovInfo
+from ucapi import Entity
 
 _LOG = logging.getLogger(__name__)
 
+class TrinnovEntity(Entity):
+    """Trinnov entity."""
+
+    @property
+    def deviceid(self) -> str:
+        """Return the device identifier."""
+        raise NotImplementedError()
 
 def extract_device_id(entity: ucapi.Entity) -> str:
     """
@@ -190,6 +198,14 @@ class Devices:
     def __iter__(self) -> Iterator[TrinnovInfo]:
         """Allow iteration directly on the Devices instance."""
         return iter(self._config)
+
+    def __len__(self) -> int:
+        """Number of configured devices."""
+        return len(self._config)
+
+    def __bool__(self) -> bool:
+        """Truthiness reflects whether any devices are configured."""
+        return bool(self._config)
 
 
 devices: Devices | None = None

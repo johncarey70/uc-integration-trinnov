@@ -8,6 +8,7 @@ Media-player entity functions.
 import logging
 from typing import Any
 
+from config import TrinnovEntity
 from const import EntityPrefix, MediaPlayerDef
 from device import TrinnovDevice, TrinnovInfo
 from ucapi import MediaPlayer, StatusCodes
@@ -15,32 +16,33 @@ from ucapi.media_player import Attributes, Commands, DeviceClasses, States
 
 _LOG = logging.getLogger(__name__)
 
-class TrinnovMediaPlayer(MediaPlayer):
+class TrinnovMediaPlayer(MediaPlayer, TrinnovEntity):
     """Representation of a Trinnov Media Player entity."""
 
     def __init__(self, mp_info: TrinnovInfo, device: TrinnovDevice):
-        """Initialize the class."""
         self._device = device
+        self._device_id = mp_info.id
+
         entity_id = f"{EntityPrefix.MEDIA_PLAYER.value}.{mp_info.id}"
+
         features = MediaPlayerDef.features
         attributes = MediaPlayerDef.attributes
-        #self.simple_commands = [*SimpleCommands]
 
-        options = {
-            #Options.SIMPLE_COMMANDS: self.simple_commands
-        }
         super().__init__(
             entity_id,
             f"{mp_info.name} Media Player",
             features,
             attributes,
             device_class=DeviceClasses.RECEIVER,
-            options=options,
+            options=None,
         )
 
-        _LOG.debug("TrinnovMediaPlayer init %s : %s", entity_id, attributes)
+    @property
+    def deviceid(self) -> str:
+        return self._device_id
 
-    async def command(self, cmd_id: str, params: dict[str, Any] | None = None) -> StatusCodes:
+
+    async def command(self, cmd_id: str, params: dict[str, Any] | None = None, *, websocket: Any) -> StatusCodes:
         """
         Media-player entity command handler.
 
@@ -77,24 +79,18 @@ class TrinnovMediaPlayer(MediaPlayer):
             case Commands.UNMUTE:
                 await self._device.executor.mute(0)
                 res = StatusCodes.OK
-            case Commands.OFF:
-                res = await self._device.power_off()
-            case Commands.ON:
-                res = await self._device.power_on()
 
             case Commands.SELECT_SOUND_MODE:
-                sound_modes = self._device.sound_modes
-                upmixer = params.get("mode") if params else None
-                if not sound_modes or not upmixer:
+                formats = self._device.listening_formats
+                upmixer_label = params.get("mode") if params else None
+                if not formats or not upmixer_label:
                     res = StatusCodes.BAD_REQUEST
                 else:
-                    # Reverse lookup: label -> key
-                    mode_key = next((k for k, v in sound_modes.items() if v == upmixer), None)
+                    mode_key = next((k for k, v in formats.items() if v == upmixer_label), None)
                     if not mode_key:
                         res = StatusCodes.BAD_REQUEST
                     else:
-                        await self._device.executor.upmixer(mode_key)
-                        res = StatusCodes.OK
+                        res = await self._device.select_sound_mode(mode_key)
 
             case Commands.SELECT_SOURCE:
                 labels = self._device.source_list
@@ -137,7 +133,14 @@ class TrinnovMediaPlayer(MediaPlayer):
         :return: filtered entity attributes containing changed attributes only.
         """
         attributes = {}
-        update[Attributes.SOUND_MODE_LIST] = list(self._device.sound_modes.values())
+        update[Attributes.SOUND_MODE_LIST] = list(self._device.listening_formats.values())
+
+        labels = self._device.source_list
+
+        if isinstance(labels, dict):
+            update[Attributes.SOURCE_LIST] = list(labels.values())
+        else:
+            update[Attributes.SOURCE_LIST] = list(labels) if labels else []
 
         for key in (
             Attributes.MUTED,

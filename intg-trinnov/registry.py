@@ -80,11 +80,11 @@ async def disconnect_all() -> None:
         await device.disconnect()
 
 
-def iter_devices() -> Iterator[TrinnovDevice]:
+def iter_devices() -> list[TrinnovDevice]:
     """
-    Yield each registered TrinnovDevice instance.
+    Return a snapshot of all registered TrinnovDevice instances.
 
     Returns:
-        An iterator over all registered device objects.
+        A list of registered device objects.
     """
-    return iter(_configured_trinnovs.values())
+    return list(_configured_trinnovs.values())

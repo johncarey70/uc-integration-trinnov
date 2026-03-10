@@ -17,12 +17,19 @@ from ucapi import media_player, remote
 
 class EntityPrefix(str, Enum):
     """Enumeration of supported entities"""
+    AUDIO_SYNC = "audio_sync"
+    CODEC = "codec"
     MEDIA_PLAYER = "media_player"
+    MUTE = "mute"
+    PRESETS = "presets"
+    REMAPPING_MODE = "remapping_mode"
+    REMAPPING_MODE_SELECT = "remapping_mode_select"
     REMOTE = "remote"
     SAMPLE_RATE = "sample_rate"
-    AUDIO_SYNC = "audio_sync"
+    SOURCES = "sources"
+    LISTENING_FORMAT = "listening_format"
+    UPMIXER = "upmixer" # used for sensor
     VOLUME = "volume"
-    MUTED = "muted"
 
 
 class SimpleCommands(str, Enum):
@@ -69,7 +76,7 @@ class MediaPlayerDef: # pylint: disable=too-few-public-methods
         media_player.Features.SELECT_SOURCE,
         media_player.Features.UNMUTE,
         media_player.Features.VOLUME,
-        media_player.Features.VOLUME_UP_DOWN,
+        media_player.Features.VOLUME_UP_DOWN
     ]
     attributes = {
         media_player.Attributes.MUTED: False,
@@ -78,7 +85,7 @@ class MediaPlayerDef: # pylint: disable=too-few-public-methods
         media_player.Attributes.SOURCE: "",
         media_player.Attributes.SOURCE_LIST: [],
         media_player.Attributes.STATE: media_player.States.OFF,
-        media_player.Attributes.VOLUME: -20,
+        media_player.Attributes.VOLUME: 0,
     }
 
 

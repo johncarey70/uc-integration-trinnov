@@ -1,6 +1,6 @@
 {
   "driver_id": "trinnov",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "min_core_api": "0.20.0",
   "name": {
     "en": "Trinnov Altitude"
@@ -9,14 +9,14 @@
   "description": {
     "en": "Integration to control a Trinnov Altitude Processor."
   },
-  "port": 9086,
+  "port": 9085,
   "developer": {
     "name": "John J Carey",
     "email": "hello@unfoldedcircle.com",
     "url": "https://www.github.com/johncarey70"
   },
   "home_page": "https://www.unfoldedcircle.com",
-  "release_date": "2025-07-01",
+  "release_date": "2026-05-03",
   "setup_data_schema": {
     "title": {
       "en": "Configuration"
@@ -30,19 +30,8 @@
         "field": {
           "label": {
             "value": {
-              "en": "By clicking on next an attempt is made to automatically find the Trinnov Altitude Processor in your local network.\nThe Trinnov must be powered on for this to work.\nIf the Trinnov is not connected to the local network you must activate by using the manual setup."
+              "en": "By clicking Next, the driver will automatically discover Trinnov Altitude Processors on your local network. The Trinnov must be powered on and connected to the same network for discovery to succeed. If multiple devices are found, you will be asked to select which processor to use. If no device is found, this indicates a network configuration issue that must be resolved before continuing."
             }
-          }
-        }
-      },
-      {
-        "id": "manual",
-        "label": {
-          "en": "Manual Setup"
-        },
-        "field": {
-          "checkbox": {
-            "value": false
           }
         }
       }
