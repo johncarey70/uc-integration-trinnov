@@ -1,7 +1,6 @@
 """Provides connection utilities for communicating with a Trinnov device."""
 
 # pylint: disable=too-many-arguments
-# pylint: disable=too-many-positional-arguments
 # pylint: disable=too-many-instance-attributes
 
 import asyncio
@@ -34,6 +33,7 @@ ParamTuple = tuple[ParamType, ...]
 ParamDict = dict[str, ParamType]
 
 _LOG = logging.getLogger(__name__)
+ERROR_OS_WAIT = 0.5
 
 class Events(IntEnum):
     """Internal driver events."""
@@ -75,7 +75,10 @@ class TrinnovDevice:
         """Initialize the Trinnov device wrapper and subscribe to state events."""
 
         # Identifiers
-        self.device_id = device_id or "unknown"
+        if not device_id:
+            raise ValueError("device_id must be provided")
+
+        self.device_id = device_id
         self.ip = ip
         self.port = DEFAULT_PROTOCOL_PORT
         self.mac = mac
@@ -123,6 +126,19 @@ class TrinnovDevice:
     def audio_sync(self) -> bool:
         """Return the cached audio sync status."""
         return self._attr_audio_sync
+
+    @property
+    def is_connected(self) -> bool:
+        """Return True when the Trinnov control socket is connected."""
+        return self._connected
+
+    @property
+    def is_connecting(self) -> bool:
+        """Return True when a connect/wait task is already in progress."""
+        return (
+            (self._wait_task is not None and not self._wait_task.done())
+            or (self._reconnect_task is not None and not self._reconnect_task.done())
+        )
 
     @property
     def executor(self) -> CommandExecutor:
@@ -224,6 +240,10 @@ class TrinnovDevice:
     # Connection Management
     # ------------------------------------------------------------------
 
+    def mark_intentional_disconnect(self) -> None:
+        """Mark the next disconnect as intentional (prevents auto-reconnect)."""
+        self._was_intentional_disconnect = True
+
     async def connect(self):
         """Establish a connection to the Trinnov device, retrying until it becomes reachable."""
         if self._device.context.connection.handler is not None:
@@ -314,26 +334,43 @@ class TrinnovDevice:
         try:
             sig = inspect.signature(method)
 
-            if len(sig.parameters) == 0:
-                result = method()
+            def _invoke():
+                if len(sig.parameters) == 0:
+                    return method()
 
-            elif isinstance(parms, (list, tuple)):
-                result = method(*parms)
-            elif isinstance(parms, dict):
-                result = method(**parms)
-            else:
+                if isinstance(parms, (list, tuple)):
+                    return method(*parms)
+                if isinstance(parms, dict):
+                    return method(**parms)
                 if parms is None:
-                    result = method()
-                else:
-                    result = method(parms)
+                    return method()
+                return method(parms)
 
-            if asyncio.iscoroutine(result):
-                await result
+            try:
+                result = _invoke()
+                if asyncio.iscoroutine(result):
+                    await result
+
+            except (BrokenPipeError, ConnectionError, OSError, asyncio.TimeoutError) as ex:
+                _LOG.warning(
+                    "[%s] OS/network error on command %s: %s  retrying in %.1fs",
+                    self.ip,
+                    command,
+                    ex,
+                    ERROR_OS_WAIT,
+                )
+                await asyncio.sleep(ERROR_OS_WAIT)
+
+                result = _invoke()
+                if asyncio.iscoroutine(result):
+                    await result
 
             return ucapi.StatusCodes.OK
+
         except ValueError as err:
             _LOG.exception("Error executing command %s: %s", command, str(err))
             return ucapi.StatusCodes.BAD_REQUEST
+
         except Exception as err:
             _LOG.exception("Error executing command %s: %s", command, err)
             return ucapi.StatusCodes.SERVICE_UNAVAILABLE
@@ -350,21 +387,23 @@ class TrinnovDevice:
     async def power_off(self) -> StatusCodes:
         """Send the power-off command to the Trinnov device if it is currently on."""
         if self.state == MediaStates.ON:
-            await self.executor.power_off()
-        else:
-            _LOG.debug("Power off skipped: Device is already %s.", self.state.value)
+            return await self.send_command("power_off")
+
+        _LOG.debug("Power off skipped: Device is already %s.", self.state.value)
         return StatusCodes.OK
 
     async def select_preset(self, preset: int) -> StatusCodes:
         """Load a preset by index on the Trinnov device."""
-
         if preset is None:
             return StatusCodes.BAD_REQUEST
-        _LOG.debug("Load preset : %i", preset)
 
-        await self.executor.load_preset(preset)
-        _LOG.info("Sent loadp command for %i", preset)
-        return StatusCodes.OK
+        _LOG.debug("Load preset: %i", preset)
+
+        result = await self.send_command("load_preset", preset)
+        if result == StatusCodes.OK:
+            _LOG.info("Sent load_preset command for %i", preset)
+
+        return result
 
     async def select_remapping_mode(self, mode: str) -> StatusCodes:
         """Set the requested remapping mode and trigger a refresh of the effective mode."""
@@ -384,22 +423,26 @@ class TrinnovDevice:
             return StatusCodes.BAD_REQUEST
 
         _LOG.debug("Set remapping mode to: %s", raw)
-        await self.executor.select_remapping_mode(raw)
-        self._event_loop.create_task(self.executor.select_remapping_mode())
 
-        _LOG.info("Sent remapping mode select command for upmixer %s", raw)
-        return StatusCodes.OK
+        result = await self.send_command("select_remapping_mode", raw)
+        if result == StatusCodes.OK:
+            self._event_loop.create_task(self.send_command("select_remapping_mode"))
+            _LOG.info("Sent remapping mode select command for upmixer %s", raw)
+
+        return result
 
     async def select_source(self, source: str) -> StatusCodes:
         """Switch the Trinnov device to the specified input source."""
-
         if not source:
             return StatusCodes.BAD_REQUEST
+
         _LOG.debug("Set input: %s", source)
 
-        await self.executor.select_source(source)
-        _LOG.info("Sent source select command for input %s", source)
-        return StatusCodes.OK
+        result = await self.send_command("select_source", source)
+        if result == StatusCodes.OK:
+            _LOG.info("Sent source select command for input %s", source)
+
+        return result
 
     async def select_sound_mode(self, upmixer: str) -> StatusCodes:
         """Set the requested upmixer mode and trigger a refresh of the effective mode."""
@@ -408,11 +451,13 @@ class TrinnovDevice:
             return StatusCodes.BAD_REQUEST
 
         _LOG.debug("Set upmixer to: %s", upmixer)
-        await self.executor.select_sound_mode(upmixer)
-        self._event_loop.create_task(self.executor.upmixer())
 
-        _LOG.info("Sent sound mode select command for upmixer %s", upmixer)
-        return StatusCodes.OK
+        result = await self.send_command("select_sound_mode", upmixer)
+        if result == StatusCodes.OK:
+            self._event_loop.create_task(self.send_command("upmixer"))
+            _LOG.info("Sent sound mode select command for upmixer %s", upmixer)
+
+        return result
 
     def _subscribe_device_state_events(self) -> None:
         """Register handlers for state-change events emitted by the pytrinnov dispatcher."""
@@ -483,7 +528,7 @@ class TrinnovDevice:
 
             try:
                 self.events.emit(Events.DISCONNECTED.name, self.device_id)
-            except Exception as exc:
+            except (RuntimeError, ValueError) as exc:
                 _LOG.exception("Unhandled exception during DISCONNECTED event: %s", exc)
 
             updates = {
