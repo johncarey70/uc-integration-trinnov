@@ -21,6 +21,7 @@ from config import TrinnovEntity
 from const import EntityPrefix
 from device import TrinnovDevice
 from ucapi import Select, StatusCodes
+from ucapi.media_player import States as MediaStates
 from ucapi.select import Attributes as SelectAttr
 from ucapi.select import Commands
 from ucapi.select import States as SelectStates
@@ -122,11 +123,7 @@ SELECT_SPECS: dict[EntityPrefix, _SelectSpec] = {
     EntityPrefix.SOURCES: _SelectSpec(
         prefix=EntityPrefix.SOURCES,
         name={"en": "Source"},
-        current_fn=lambda d: (
-            (d.source_list or {}).get(d._attr_source_index, "")
-            if getattr(d, "_attr_source_index", None) is not None
-            else ""
-        ),
+        current_fn=lambda d: (d.source_list or {}).get(d._attr_source_index, ""),
         options_fn=lambda d: list((d.source_list or {}).values()),
         select_fn=_select_source,
     ),
@@ -140,11 +137,7 @@ SELECT_SPECS: dict[EntityPrefix, _SelectSpec] = {
     EntityPrefix.LISTENING_FORMAT: _SelectSpec(
         prefix=EntityPrefix.LISTENING_FORMAT,
         name={"en": "Listening Format"},
-        current_fn=lambda d: (
-            (d.listening_formats or {}).get(d._attr_listening_format_key, "")
-            if getattr(d, "_attr_listening_format_key", None) is not None
-            else ""
-        ),
+        current_fn=lambda d: d.listening_format_label or "",
         options_fn=lambda d: list((d.listening_formats or {}).values()),
         select_fn=_select_upmixer,
     ),
@@ -168,11 +161,19 @@ SELECT_SPECS: dict[EntityPrefix, _SelectSpec] = {
 class TrinnovSelect(Select, TrinnovEntity):
     """Generic Trinnov select entity."""
 
-    def __init__(self, device_id: str, device_name: str, device: TrinnovDevice, prefix: EntityPrefix) -> None:
+    def __init__(
+            self,
+            device_id: str,
+            device_name: str,
+            device: TrinnovDevice,
+            prefix: EntityPrefix
+        ) -> None:
+
         if prefix not in SELECT_SPECS:
             raise ValueError(f"Unsupported select prefix: {prefix}")
 
-        self._device_id = device_id
+        self.device_id = device_id
+
         self._device = device
         self._spec = SELECT_SPECS[prefix]
         self._state: SelectStates = SelectStates.ON
@@ -187,10 +188,6 @@ class TrinnovSelect(Select, TrinnovEntity):
             attributes={},
         )
 
-    @property
-    def deviceid(self) -> str:
-        """Return the UC device identifier."""
-        return self._device_id
 
     @property
     def current_option(self) -> str:
@@ -209,14 +206,18 @@ class TrinnovSelect(Select, TrinnovEntity):
         """Apply incremental updates or build a full select state snapshot."""
 
         # Incremental update from driver
-        if update:
+        if update is not None:
             if SelectAttr.STATE in update:
                 self._state = update[SelectAttr.STATE]  # keep internal state in sync
             return update
 
         # Full snapshot (used during priming / get_entity_states)
         options = self.select_options
-        state = SelectStates.ON if options else SelectStates.UNAVAILABLE
+        state = (
+            SelectStates.UNAVAILABLE
+            if self._device.state in (MediaStates.OFF, MediaStates.UNAVAILABLE)
+            else SelectStates.ON
+        )
 
         return {
             SelectAttr.CURRENT_OPTION: self.current_option,
@@ -279,7 +280,11 @@ class TrinnovSelect(Select, TrinnovEntity):
 # Factory
 # ---------------------------------------------------------------------------
 
-def build_trinnov_selects(device_id: str, device_name: str, device: TrinnovDevice) -> list[TrinnovSelect]:
+def build_trinnov_selects(
+        device_id: str,
+        device_name: str,
+        device: TrinnovDevice
+    ) -> list[TrinnovSelect]:
     """Create all Trinnov select entities for a device."""
     return [
         TrinnovSelect(device_id, device_name, device, EntityPrefix.SOURCES),
