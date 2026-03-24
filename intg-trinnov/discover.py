@@ -126,8 +126,8 @@ def discover_trinnov_devices(
         for b in browsers:
             try:
                 b.cancel()
-            except Exception:
-                pass
+            except (RuntimeError, AttributeError) as err:
+                _LOG.debug("Ignoring browser cancel failure: %s", err)
         zeroconf.close()
 
     return listener.found
