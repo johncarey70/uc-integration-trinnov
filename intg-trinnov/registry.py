@@ -4,7 +4,7 @@ Registry for active TrinnovDevice instances.
 Used to store and retrieve device connections by device ID.
 """
 
-from typing import Dict, Iterator
+from typing import Dict
 
 from device import TrinnovDevice
 
@@ -76,7 +76,7 @@ async def disconnect_all() -> None:
     Disconnect all registered TrinnovDevice instances asynchronously.
     """
     for device in iter_devices():
-        device._was_intentional_disconnect = True
+        device.mark_intentional_disconnect()
         await device.disconnect()
 
 
