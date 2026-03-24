@@ -31,10 +31,7 @@ _LOG = logging.getLogger(__name__)
 class TrinnovEntity(Entity):
     """Trinnov entity."""
 
-    @property
-    def deviceid(self) -> str:
-        """Return the device identifier."""
-        raise NotImplementedError()
+    device_id: str
 
 def extract_device_id(entity: ucapi.Entity) -> str:
     """
@@ -208,4 +205,4 @@ class Devices:
         return bool(self._config)
 
 
-devices: Devices | None = None
+devices: Devices

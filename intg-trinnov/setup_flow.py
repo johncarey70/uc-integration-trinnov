@@ -6,6 +6,7 @@ and device onboarding into the system.
 """
 
 # pylint: disable=too-many-return-statements
+# pylint: disable=line-too-long
 
 from __future__ import annotations
 
