@@ -108,12 +108,18 @@ class TrinnovSensor(Sensor, TrinnovEntity):
     Entity id convention: "{prefix}.{device_id}"
     """
 
-    def __init__(self, device_id: str, device_name: str, device: TrinnovDevice, prefix: EntityPrefix) -> None:
+    def __init__(self,
+                 device_id: str,
+                 device_name: str,
+                 device: TrinnovDevice,
+                 prefix: EntityPrefix
+            ) -> None:
 
         if prefix not in SENSOR_SPECS:
             raise ValueError(f"Unsupported sensor prefix: {prefix}")
 
-        self._device_id = device_id
+        self.device_id = device_id
+
         self._device = device
         self._spec = SENSOR_SPECS[prefix]
         self._state: States = States.UNAVAILABLE
@@ -131,10 +137,6 @@ class TrinnovSensor(Sensor, TrinnovEntity):
             options=self._spec.options,
         )
 
-    @property
-    def deviceid(self) -> str:
-        """Return the UC device identifier."""
-        return self._device_id
 
     @property
     def state(self) -> States:
@@ -185,7 +187,11 @@ class TrinnovSensor(Sensor, TrinnovEntity):
 # Factory
 # ---------------------------------------------------------------------------
 
-def build_trinnov_sensors(device_id: str, device_name: str, device: TrinnovDevice) -> list[TrinnovSensor]:
+def build_trinnov_sensors(
+        device_id: str,
+        device_name: str,
+        device: TrinnovDevice
+    ) -> list[TrinnovSensor]:
     """Create all Trinnov sensor entities for a device."""
     prefixes = [
         EntityPrefix.AUDIO_SYNC,

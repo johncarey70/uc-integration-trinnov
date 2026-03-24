@@ -30,13 +30,17 @@ REMOTE_STATE_MAPPING = {
     MediaStates.UNKNOWN: States.UNKNOWN,
 }
 
+def _is_valid_simple_command(value: str) -> bool:
+    """Return True if value matches a SimpleCommands enum value."""
+    return value in {member.value for member in cmds}
+
 class TrinnovRemote(Remote, TrinnovEntity):
     """Representation of a Trinnov Remote entity."""
 
     def __init__(self, info: TrinnovInfo, device: TrinnovDevice):
         """Initialize the class."""
         self._device = device
-        self._device_id = info.id
+        self.device_id = info.id
 
         entity_id = f"{EntityPrefix.REMOTE.value}.{info.id}"
         features = RemoteDef.features
@@ -51,10 +55,6 @@ class TrinnovRemote(Remote, TrinnovEntity):
             button_mapping=self.create_button_mappings(),
             ui_pages=self.create_ui(),
         )
-
-    @property
-    def deviceid(self) -> str:
-        return self._device_id
 
     def create_button_mappings(self) -> list[DeviceButtonMapping | dict[str, Any]]:
         """Create button mappings."""
@@ -100,91 +100,110 @@ class TrinnovRemote(Remote, TrinnovEntity):
 
         return [ui_page1, ui_page2]
 
-    async def command(self, cmd_id: str, params: dict[str, Any] | None = None, *, websocket: Any) -> StatusCodes:
-        """
-        Handle command requests from the integration API for the remote entity.
-        """
-
+    async def command(
+        self,
+        cmd_id: str,
+        params: dict[str, Any] | None = None,
+        *,
+        websocket: Any,
+    ) -> StatusCodes:
+        """Handle command requests for the remote entity."""
         params = params or {}
 
         simple_cmd: str | None = params.get("command")
         if simple_cmd and simple_cmd.startswith("remote"):
             cmd_id = simple_cmd.split(".")[1]
 
-        _LOG.info("Received Remote command request: %s with parameters: %s", cmd_id, params or "no parameters")
-
-
-        status = StatusCodes.BAD_REQUEST  # Default fallback
+        _LOG.info(
+            "Received Remote command request: %s with parameters: %s",
+            cmd_id,
+            params or "no parameters",
+        )
 
         try:
             cmd = Commands(cmd_id)
             _LOG.debug("Resolved command: %s", cmd)
         except ValueError:
-            status = StatusCodes.NOT_IMPLEMENTED
+            return StatusCodes.NOT_IMPLEMENTED
+
+        match cmd:
+            case Commands.ON:
+                return await self._device.power_on()
+
+            case Commands.OFF:
+                return await self._device.power_off()
+
+            case Commands.SEND_CMD:
+                return await self._handle_send_cmd(simple_cmd)
+
+            case Commands.SEND_CMD_SEQUENCE:
+                return await self._handle_send_cmd_sequence(params)
+
+            case _:
+                return StatusCodes.NOT_IMPLEMENTED
+
+    async def _handle_send_cmd(
+        self,
+        simple_cmd: str | None,
+    ) -> StatusCodes:
+        """Handle SEND_CMD requests."""
+        if not simple_cmd:
+            _LOG.warning("Missing command in SEND_CMD")
+            return StatusCodes.BAD_REQUEST
+
+        normalized = simple_cmd.replace(" ", "_").lower()
+
+        if not _is_valid_simple_command(normalized):
+            _LOG.warning("Unknown command: %s", normalized)
+            return StatusCodes.NOT_IMPLEMENTED
+
+        result = (
+            parse_toggle_command("mute", normalized)
+            or parse_toggle_command("dim", normalized)
+            or parse_toggle_command("bypass", normalized)
+        )
+
+        actual_cmd: str | None
+        cmd_params: Any | None
+
+        if result:
+            actual_cmd, cmd_params = result
         else:
-            match cmd:
-                case Commands.ON:
-                    status = await self._device.power_on()
+            actual_cmd, cmd_params = normalized, None
 
-                case Commands.OFF:
-                    status = await self._device.power_off()
+        _LOG.debug("Resolved simple command: %s params=%s", actual_cmd, cmd_params)
+        return await self._device.send_command(actual_cmd, cmd_params)
 
-                case Commands.SEND_CMD:
-                    if not simple_cmd:
-                        _LOG.warning("Missing command in SEND_CMD")
-                        status = StatusCodes.BAD_REQUEST
-                        return status
+    async def _handle_send_cmd_sequence(
+        self,
+        params: dict[str, Any],
+    ) -> StatusCodes:
+        """Handle SEND_CMD_SEQUENCE requests."""
+        commands = params.get("sequence", [])
 
-                    simple_cmd = simple_cmd.replace(" ", "_").lower()
+        if not commands:
+            return StatusCodes.BAD_REQUEST
 
-                    if simple_cmd in cmds._value2member_map_:
-                        actual_cmd = None
-                        cmd_params = None
+        if commands[0] == "volume":
+            try:
+                volume_percent = int(commands[1])
+            except (IndexError, ValueError, TypeError):
+                return StatusCodes.BAD_REQUEST
 
-                        # Handle toggle command groups
-                        result = (
-                            parse_toggle_command("mute", simple_cmd) or
-                            parse_toggle_command("dim", simple_cmd) or
-                            parse_toggle_command("bypass", simple_cmd)
-                        )
+            return await self._device.send_command(
+                "volume",
+                self._device.percent_to_db(volume_percent),
+            )
 
-                        if result:
-                            actual_cmd, cmd_params = result
-                        else:
-                            actual_cmd = simple_cmd
+        if commands[0] == "select_sound_mode":
+            try:
+                mode_key = str(commands[1])
+            except (IndexError, TypeError):
+                return StatusCodes.BAD_REQUEST
 
-                        if actual_cmd:
-                            _LOG.debug(actual_cmd)
-                            _LOG.debug(params)
+            return await self._device.select_sound_mode(mode_key)
 
-                            status = await self._device.send_command(actual_cmd, cmd_params)
-                    else:
-                        _LOG.warning("Unknown command: %s", simple_cmd)
-                        status = StatusCodes.NOT_IMPLEMENTED
-
-                case Commands.SEND_CMD_SEQUENCE:
-                    commands = params.get("sequence", [])
-                    if commands and commands[0] == "volume":
-                        try:
-                            volume_percent = int(commands[1])
-                            await self._device.executor.volume(self._device.percent_to_db(volume_percent))
-                            status = StatusCodes.OK
-                        except (IndexError, ValueError):
-                            status = StatusCodes.BAD_REQUEST
-                    elif commands and commands[0] == "select_sound_mode":
-                        try:
-                            mode_key = str(commands[1])
-                        except (IndexError, TypeError):
-                            return StatusCodes.BAD_REQUEST
-                        status = await self._device.select_sound_mode(mode_key)
-                    else:
-                        status = StatusCodes.NOT_IMPLEMENTED
-
-                case _:
-                    status = StatusCodes.NOT_IMPLEMENTED
-
-        return status
-
+        return StatusCodes.NOT_IMPLEMENTED
 
     def filter_changed_attributes(self, update: dict[str, Any]) -> dict[str, Any]:
         """

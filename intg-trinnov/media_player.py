@@ -21,7 +21,7 @@ class TrinnovMediaPlayer(MediaPlayer, TrinnovEntity):
 
     def __init__(self, mp_info: TrinnovInfo, device: TrinnovDevice):
         self._device = device
-        self._device_id = mp_info.id
+        self.device_id = mp_info.id
 
         entity_id = f"{EntityPrefix.MEDIA_PLAYER.value}.{mp_info.id}"
 
@@ -37,12 +37,14 @@ class TrinnovMediaPlayer(MediaPlayer, TrinnovEntity):
             options=None,
         )
 
-    @property
-    def deviceid(self) -> str:
-        return self._device_id
 
-
-    async def command(self, cmd_id: str, params: dict[str, Any] | None = None, *, websocket: Any) -> StatusCodes:
+    async def command(
+            self,
+            cmd_id: str,
+            params: dict[str, Any] | None = None,
+            *,
+            websocket: Any
+        ) -> StatusCodes:
         """
         Media-player entity command handler.
 
@@ -53,6 +55,8 @@ class TrinnovMediaPlayer(MediaPlayer, TrinnovEntity):
         :return: status code of the command request
         """
         _LOG.info("Got %s command request: %s %s", self.id, cmd_id, params)
+
+        params = params or {}
 
         try:
             cmd = Commands(cmd_id)
@@ -71,18 +75,15 @@ class TrinnovMediaPlayer(MediaPlayer, TrinnovEntity):
             case Commands.PREVIOUS:
                 res = StatusCodes.OK
             case Commands.MUTE_TOGGLE:
-                await self._device.executor.mute(2)
-                res = StatusCodes.OK
+                res = await self._device.send_command("mute", 2)
             case Commands.MUTE:
-                await self._device.executor.mute(1)
-                res = StatusCodes.OK
+                res = await self._device.send_command("mute", 1)
             case Commands.UNMUTE:
-                await self._device.executor.mute(0)
-                res = StatusCodes.OK
+                res = await self._device.send_command("mute", 0)
 
             case Commands.SELECT_SOUND_MODE:
                 formats = self._device.listening_formats
-                upmixer_label = params.get("mode") if params else None
+                upmixer_label = params.get("mode")
                 if not formats or not upmixer_label:
                     res = StatusCodes.BAD_REQUEST
                 else:
@@ -94,31 +95,35 @@ class TrinnovMediaPlayer(MediaPlayer, TrinnovEntity):
 
             case Commands.SELECT_SOURCE:
                 labels = self._device.source_list
-                label_name = params.get("source") if params else None
+                label_name = params.get("source")
                 if not labels or not label_name:
                     res = StatusCodes.BAD_REQUEST
-                    return res
-
-                index = next((k for k, v in labels.items() if v == label_name), None)
-                if index is None:
-                    res = StatusCodes.BAD_REQUEST
                 else:
-                    await self._device.executor.select_source(index)
-                    res = StatusCodes.OK
+                    index = next((k for k, v in labels.items() if v == label_name), None)
+                    if index is None:
+                        res = StatusCodes.BAD_REQUEST
+                    else:
+                        res = await self._device.send_command("select_source", index)
 
             case Commands.VOLUME_DOWN:
-                await self._device.executor.volume_down()
-                res = StatusCodes.OK
+                res = await self._device.send_command("volume_down")
 
             case Commands.VOLUME_UP:
-                await self._device.executor.volume_up()
-                res = StatusCodes.OK
+                res = await self._device.send_command("volume_up")
 
             case Commands.VOLUME:
-                volume = int(params.get("volume")) if params else None
-                if volume is not None:
-                    await self._device.executor.volume(self._device.percent_to_db(volume))
-                    res = StatusCodes.OK
+                try:
+                    raw_volume = params.get("volume")
+                    if raw_volume is None:
+                        res = StatusCodes.BAD_REQUEST
+                    else:
+                        volume = int(raw_volume)
+                        res = await self._device.send_command(
+                            "volume",
+                            self._device.percent_to_db(volume),
+                        )
+                except (TypeError, ValueError):
+                    res = StatusCodes.BAD_REQUEST
 
             case _:
                 res = StatusCodes.BAD_REQUEST
@@ -157,7 +162,6 @@ class TrinnovMediaPlayer(MediaPlayer, TrinnovEntity):
 
         if attributes.get(Attributes.STATE) == States.OFF:
             attributes[Attributes.SOURCE] = ""
-            attributes[Attributes.SOURCE_LIST] = []
 
         if attributes:
             _LOG.debug("TrinnovMediaPlayer update attributes %s -> %s", update, attributes)
