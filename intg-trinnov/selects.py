@@ -123,7 +123,7 @@ SELECT_SPECS: dict[EntityPrefix, _SelectSpec] = {
     EntityPrefix.SOURCES: _SelectSpec(
         prefix=EntityPrefix.SOURCES,
         name={"en": "Source"},
-        current_fn=lambda d: (d.source_list or {}).get(d._attr_source_index, ""),
+        current_fn=lambda d: (d.source_list or {}).get(d.source_index, ""),
         options_fn=lambda d: list((d.source_list or {}).values()),
         select_fn=_select_source,
     ),
