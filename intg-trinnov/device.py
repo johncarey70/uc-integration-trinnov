@@ -161,6 +161,11 @@ class TrinnovDevice:
         return self._device.audio_settings.source_list or {}
 
     @property
+    def source_index(self) -> int | None:
+        """Return the cached source index."""
+        return self._attr_source_index
+
+    @property
     def listening_formats(self) -> dict[str, str]:
         """Return key->label listening formats."""
         return self._device.audio_settings.listening_formats or {}
