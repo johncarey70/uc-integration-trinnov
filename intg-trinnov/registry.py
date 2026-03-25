@@ -64,10 +64,11 @@ def clear_devices() -> None:
 
 
 async def connect_all() -> None:
-    """
-    Connect all registered TrinnovDevice instances asynchronously.
-    """
+    """Connect all registered TrinnovDevice instances asynchronously."""
     for device in iter_devices():
+        if device.is_connected or device.is_connecting:
+            continue
+
         await device.connect()
 
 
